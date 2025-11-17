@@ -15,7 +15,7 @@ class WorkflowOut(BaseModel):
     created_at: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True  # <-- FIXED
 
 
 class ExecutionOut(BaseModel):
@@ -26,10 +26,10 @@ class ExecutionOut(BaseModel):
     finished_at: Optional[datetime]
 
     class Config:
-        orm_mode = True
+        from_attributes = True  # <-- FIXED
 
 
-class StepResultOut(BaseModel):
+class StepResultOut(BaseEmodel):
     id: int
     execution_id: int
     node_id: str
@@ -39,4 +39,4 @@ class StepResultOut(BaseModel):
     timestamp: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True  # <-- FIXED

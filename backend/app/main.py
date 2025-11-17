@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes import workflow, documents, search, execution
+from app.routes import workflow, documents, search, execution, agent_router
 
 app = FastAPI(title="Agentic Workflow Automation Platform - Backend")
 
@@ -23,3 +23,4 @@ app.include_router(workflow.router, prefix="/workflow", tags=["workflow"])
 app.include_router(documents.router, prefix="/documents", tags=["documents"])
 app.include_router(search.router, prefix="/search", tags=["search"])
 app.include_router(execution.router, prefix="/execution", tags=["execution"])
+app.include_router(agent_router.router, prefix="/agent", tags=["agent"])

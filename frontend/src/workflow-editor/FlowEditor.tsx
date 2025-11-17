@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react'
-import ReactFlow, { Background, Controls, MiniMap, addEdge, Connection, Edge, Node } from 'react-flow-renderer'
+import ReactFlow, { Background, Controls, MiniMap, addEdge, Connection, Edge, Node } from 'reactflow'
 import NodePalette from './NodePalette'
 
 const initialNodes: Node[] = [
