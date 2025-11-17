@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routes import workflow, documents, search
+from app.routes import workflow, documents, search, execution
 
 app = FastAPI(title="Agentic Workflow Automation Platform - Backend")
 
@@ -22,3 +22,4 @@ async def health():
 app.include_router(workflow.router, prefix="/workflow", tags=["workflow"])
 app.include_router(documents.router, prefix="/documents", tags=["documents"])
 app.include_router(search.router, prefix="/search", tags=["search"])
+app.include_router(execution.router, prefix="/execution", tags=["execution"])

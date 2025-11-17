@@ -7,3 +7,38 @@ html, body, #root {
 .app-root main {
   padding: 12px;
 }
+
+.app-header {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+}
+
+.app-main {
+  padding: 12px;
+}
+
+.editor-canvas {
+  height: 600px;
+  border: 1px solid #ddd;
+}
+
+.node-palette {
+  width: 160px;
+  padding: 8px;
+  border-right: 1px solid #eee;
+}
+
+.flow-area {
+  flex: 1;
+}
+
+.flow-root {
+  display: flex;
+  height: 100%;
+}
+
+.node-card {
+  border: 1px solid #eee;
+  padding: 8px;
+  margin: 6px 0;
+}

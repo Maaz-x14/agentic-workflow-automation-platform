@@ -1,13 +1,10 @@
 from fastapi import APIRouter
+from app.services.rag_service import rag_service
 
 router = APIRouter()
 
 
 @router.get("/")
 async def search(q: str = "", limit: int = 5):
-    # Dummy results for now; real implementation will query PGVector
-    results = [
-        {"id": f"chunk_{i}", "text": f"Result for {q} - chunk {i}", "score": 1.0 / (i + 1)}
-        for i in range(limit)
-    ]
+    results = await rag_service.search(q, top_k=limit)
     return {"query": q, "results": results}

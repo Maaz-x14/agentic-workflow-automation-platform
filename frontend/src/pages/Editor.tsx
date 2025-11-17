@@ -5,7 +5,7 @@ export default function Editor() {
   return (
     <div>
       <h2>Workflow Editor</h2>
-      <div style={{ height: 600, border: '1px solid #ddd' }}>
+      <div className="editor-canvas">
         <FlowEditor />
       </div>
     </div>
