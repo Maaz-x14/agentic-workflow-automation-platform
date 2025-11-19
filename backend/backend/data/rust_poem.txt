@@ -1,0 +1,1 @@
+Rust is a language so fine, memory-safe and fast in its prime. With ownership and borrowing too, it helps us write code anew.

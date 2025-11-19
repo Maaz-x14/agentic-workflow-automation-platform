@@ -1,87 +1,104 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Any
+from typing import Any, List
 import asyncio
 from dotenv import load_dotenv
+
+# Load env vars
 load_dotenv()
 
 router = APIRouter()
 
-
 class AgentRunRequest(BaseModel):
     goal: str | None = None
 
-
 @router.post("/test_agent")
 async def test_agent(payload: AgentRunRequest):
-    """Run a small agent that searches the web and writes results to a file.
-
-    This endpoint attempts to use LangChain's AgentExecutor and a local
-    Ollama LLM. If LangChain or Ollama is not available, it falls back to a
-    procedural execution using the tools directly.
     """
+    Run an agent using a MANUAL Tool-Calling Loop.
+    STRICT MODE: Forces the model to call tools instead of talking about them.
+    """
+    
     goal = payload.goal or "Search for info on LangGraph and save it to a file."
 
-    # Import tools (these may be LangChain tool wrappers or plain functions)
+    # 1. Import tools and Core Libraries
     from app.services.tools import web_search_tool, file_writer
+    from langchain_ollama import ChatOllama
+    from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 
-    # Try to use LangChain's agent stack if available
     try:
-        # Lazy imports so endpoint can still exist without langchain installed
-        from langchain.agents import create_tool_calling_agent, AgentExecutor
-        from langchain.schema import HumanMessage
-        # Create a very small Ollama-backed LLM wrapper for LangChain if possible
-        try:
-            # Attempt to use the LangChain Ollama wrapper (if present in the environment)
-            from langchain_ollama import Ollama
-            llm = Ollama()
-        except Exception:
-            # Fallback: define a tiny LangChain-compatible LLM wrapper that calls the
-            # local `ollama` CLI. This implements a minimal `__call__` style API used
-            # by some LangChain helpers. Note: this is intentionally minimal and may
-            # need package-specific adjustments in your environment.
-            import subprocess
-            from langchain.llms.base import LLM
+        print(f"🤖 AGENT STARTING. Goal: {goal}")
 
-            class OllamaCLI(LLM):
-                """Minimal LangChain LLM wrapper that calls `ollama chat llama3` via CLI."""
-
-                def _call(self, prompt: str, stop: list | None = None) -> str:  # type: ignore
-                    proc = subprocess.run(["ollama", "chat", "llama3", "--stdin"], input=prompt, capture_output=True, text=True)
-                    return proc.stdout if proc.returncode == 0 else proc.stderr
-
-                def _identifying_params(self):
-                    return {"backend": "ollama-cli"}
-
-            llm = OllamaCLI()
-
+        # 2. Setup LLM with Tools Bound
+        llm = ChatOllama(model="llama3.1", temperature=0)
         tools = [web_search_tool, file_writer]
+        llm_with_tools = llm.bind_tools(tools)
 
-        # create_tool_calling_agent returns an Agent instance; wrap with AgentExecutor
-        agent = create_tool_calling_agent(llm, tools)
-        agent_executor = AgentExecutor.from_agent_and_tools(agent, tools, verbose=True)
+        # 3. Define the Conversation History
+        messages = [
+            SystemMessage(content=(
+                "You are a precise execution agent. You have access to tools. "
+                "When you are asked to perform a task, you MUST call the tools directly. "
+                "DO NOT describe your plan. "
+                "DO NOT output JSON inside markdown code blocks. "
+                "Just make the tool call immediately."
+            )),
+            HumanMessage(content=goal)
+        ]
 
-        # Run the agent on the user's goal
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, lambda: agent_executor.run(goal))
+        # 4. The Execution Loop
+        
+        # STEP 1: THINK
+        ai_msg = await asyncio.to_thread(llm_with_tools.invoke, messages)
+        messages.append(ai_msg)
 
-        return {"status": "ok", "result": str(result)}
+        # STEP 2: ACT
+        if ai_msg.tool_calls:
+            print(f"🛠️  Tool Calls Detected: {len(ai_msg.tool_calls)}")
+            
+            for tool_call in ai_msg.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+                print(f"   -> Calling {tool_name} with {tool_args}")
+
+                # --- FIX STARTS HERE ---
+                # We handle both LangChain Tools (t.name) and Raw Functions (t.__name__)
+                selected_tool = None
+                for t in tools:
+                    t_name = getattr(t, "name", getattr(t, "__name__", ""))
+                    if t_name == tool_name:
+                        selected_tool = t
+                        break
+                # --- FIX ENDS HERE ---
+                
+                if selected_tool:
+                    # Invoke the tool
+                    # If it's a raw function, we call it directly. If it's a Tool, we use .invoke
+                    if hasattr(selected_tool, "invoke"):
+                        tool_output = await asyncio.to_thread(selected_tool.invoke, tool_args)
+                    else:
+                        tool_output = await asyncio.to_thread(selected_tool, **tool_args)
+                        
+                    print(f"   <- Result: {str(tool_output)[:100]}...")
+                    messages.append(ToolMessage(tool_call_id=tool_call["id"], content=str(tool_output)))
+                else:
+                    print(f"   ❌ Error: Could not find tool with name '{tool_name}'")
+                    messages.append(ToolMessage(tool_call_id=tool_call["id"], content="Error: Tool not found"))
+
+            # STEP 3: SYNTHESIZE (Final Answer)
+            print("🧠 Generating final answer...")
+            final_response = await asyncio.to_thread(llm_with_tools.invoke, messages)
+            output_text = final_response.content
+        else:
+            output_text = ai_msg.content
+            if "web_search" in output_text or "file_writer" in output_text:
+                 output_text += "\n\n[SYSTEM NOTE: Agent failed to trigger tool. It described the action instead of taking it.]"
+
+        print(f"✅ AGENT FINISHED. Output: {output_text}")
+        return {"status": "ok", "result": output_text}
+
     except Exception as e:
-        # Fallback behavior: call tools directly (safe offline path)
-        try:
-            # web_search_tool may be a LangChain Tool object or a plain function.
-            if hasattr(web_search_tool, "run"):
-                search_res = web_search_tool.run("LangGraph")
-            else:
-                search_res = web_search_tool("LangGraph")
-
-            # Save to file
-            filename = "langgraph_search.txt"
-            if hasattr(file_writer, "run"):
-                path = file_writer.run(filename, search_res)
-            else:
-                path = file_writer(filename, search_res)
-
-            return {"status": "fallback", "saved_path": path, "summary_snippet": (search_res or "")[:1000], "error": str(e)}
-        except Exception as inner:
-            raise HTTPException(status_code=500, detail={"error": str(e), "fallback_error": str(inner)})
+        print(f"❌ AGENT ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        return {"status": "error", "detail": str(e)}
