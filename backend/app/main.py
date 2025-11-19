@@ -5,6 +5,7 @@ from app.routes import workflow, documents, search, execution, agent_router
 
 app = FastAPI(title="Agentic Workflow Automation Platform - Backend")
 
+# CORS - allow frontend dev server
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173"],
@@ -18,7 +19,7 @@ app.add_middleware(
 async def health():
     return {"status": "ok"}
 
-
+# include routers
 app.include_router(workflow.router, prefix="/workflow", tags=["workflow"])
 app.include_router(documents.router, prefix="/documents", tags=["documents"])
 app.include_router(search.router, prefix="/search", tags=["search"])
