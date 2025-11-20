@@ -14,23 +14,16 @@ It is built to run entirely on local infrastructure using **Ollama**, ensuring p
 The system follows a **Client-Server-AI** architecture, designed for modularity and real-time feedback.
 
 ```mermaid
-[ User / Browser ]
-       |
-       v (HTTP / NDJSON Stream)
-[ Frontend: React + React Flow ]
-       |
-       v (REST API)
-[ Backend: FastAPI Server ]
-       |
-       +--- [ Graph Engine: Topological Sorter ]
-       |
-       +--- [ Agent Service: ReAct Loop ]
-                 |
-                 +--- [ Local AI: Ollama (Llama 3.2) ]
-                 |
-                 +--- [ Tools: Tavily / DuckDuckGo / File System ]
-                 |
-                 +--- [ Database: SQLite (Persistence) ]
+graph TD
+    User[User / Browser] -->|HTTP / NDJSON Stream| Frontend[Frontend: React + React Flow]
+    Frontend -->|REST API| Backend[Backend: FastAPI Server]
+    
+    Backend --- GraphEngine[Graph Engine: Topological Sorter]
+    Backend --- AgentService[Agent Service: ReAct Loop]
+    
+    AgentService --- LocalAI[Local AI: Ollama Llama 3.2]
+    AgentService --- Tools[Tools: Tavily / DuckDuckGo / File System]
+    AgentService --- DB[Database: SQLite Persistence]
 ```
 
 -----
