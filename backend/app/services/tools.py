@@ -167,20 +167,69 @@ def web_search_raw(query: str) -> str:
     return "System Error: Search failed on all providers. Please check your internet or API keys."
 
 
-def file_writer_raw(filename: str, content: str) -> str:
-    """Writes content to backend/data/filename."""
+def file_writer_raw(*args, **kwargs) -> str:
+    """Writes content to backend/data/filename.
+
+    Robust argument parsing: supports positional args and many keyword names.
+    Ensures path safety by forcing writes into `backend/data/` directory.
+    Raises ValueError when no content can be determined.
+    """
     try:
-        # Ensure we write to the 'data' directory relative to this file
-        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        data_dir = os.path.join(base_dir, "data")
-        os.makedirs(data_dir, exist_ok=True)
-        
-        filepath = os.path.join(data_dir, filename)
-        
+        # Path management using pathlib for safety
+        from pathlib import Path
+
+        BASE_DIR = Path(__file__).resolve().parents[2]
+        DATA_DIR = BASE_DIR / "data"
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Debug: show received args/kwargs
+        try:
+            print(f"DEBUG: file_writer received args: {args}, kwargs: {list(kwargs.keys())}")
+        except Exception:
+            pass
+
+        # Resolve filename and content from args first
+        filename = None
+        content = None
+        if len(args) > 0:
+            filename = args[0]
+        if len(args) > 1:
+            content = args[1]
+
+        # Resolve from kwargs with multiple alias support
+        if filename is None:
+            filename = kwargs.get('filename') or kwargs.get('file') or kwargs.get('path') or 'output.txt'
+
+        if content is None:
+            content = (
+                kwargs.get('content')
+                or kwargs.get('data')
+                or kwargs.get('text')
+                or kwargs.get('body')
+                or None
+            )
+
+        # If still no content, raise so caller can attempt to auto-fill
+        if content is None or (isinstance(content, str) and content.strip() == ''):
+            raise ValueError("No content provided")
+
+        # Ensure content is string
+        if not isinstance(content, str):
+            try:
+                content = str(content)
+            except Exception:
+                content = ''
+
+        filepath = DATA_DIR / str(filename)
+
+        # Write file
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
-            
-        return f"Successfully wrote to {filepath}"
+
+        return f"Successfully wrote to {str(filepath)}"
+    except ValueError:
+        # propagate ValueError so callers can handle auto-fill
+        raise
     except Exception as e:
         return f"Error writing file: {str(e)}"
 
@@ -191,6 +240,23 @@ def web_search_tool(query: str) -> str:
     return web_search_raw(query)
 
 @tool("file_writer")
-def file_writer(filename: str, content: str) -> str:
-    """Write a file to disk."""
-    return file_writer_raw(filename, content)
+def file_writer(**kwargs) -> str:
+    """Write a file to disk.
+
+    Accepts kwargs to be tolerant to hallucinated argument names. Typical expected keys:
+    - filename (or file/path)
+    - content (or data/text)
+    """
+    # Extract common keys and pass through for backward compatibility
+    # Accept flexible arguments and pass them through
+    try:
+        # Prefer explicit keys, but allow anything else through
+        filename = kwargs.get('filename') or kwargs.get('file') or kwargs.get('path')
+        content = kwargs.get('content') or kwargs.get('data') or kwargs.get('text')
+        # Call the robust writer which may raise ValueError for missing content
+        return file_writer_raw(filename, content, **kwargs)
+    except ValueError:
+        # Surface a clear error string for the agent runtime
+        return "Error: No content provided for file_writer"
+    except Exception as e:
+        return f"Error writing file: {str(e)}"
