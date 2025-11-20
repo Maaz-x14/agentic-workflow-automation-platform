@@ -55,7 +55,6 @@ function Flow() {
       const currentNodes = getNodes();
       const currentEdges = getEdges();
       const payload = { nodes: currentNodes, edges: currentEdges };
-
       console.log('🚀 Sending Payload:', payload);
 
       const res = await fetch('http://127.0.0.1:8000/workflow/run', {
@@ -63,30 +62,76 @@ function Flow() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
       });
-      const data = await res.json();
-      console.log('✅ Workflow response:', data);
 
-      // If the backend returned per-node run status, update node data with previews
-      const nodeRuns = data?.node_runs || [];
-      if (Array.isArray(nodeRuns) && nodeRuns.length > 0) {
-        setNodes((nds) =>
-          nds.map((n) => {
-            const nr = nodeRuns.find((r: any) => r.node_id === n.id);
-            if (nr) {
-              // Prefer full result from `results` if available
-              const fullRes = data?.results?.[n.id]?.result ?? data?.results?.[n.id];
-              return {
-                ...n,
-                data: {
-                  ...n.data,
-                  result: fullRes ?? nr.output_preview,
-                  _run_status: nr.status,
-                },
-              };
+      if (!res.body) {
+        throw new Error('No streaming body in response');
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+
+      // Read stream in a loop
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+
+        // Split on newline to get NDJSON lines
+        const parts = buf.split('\n');
+        // Keep the last partial line in the buffer
+        buf = parts.pop() || '';
+
+        for (const line of parts) {
+          if (!line || !line.trim()) continue;
+          let msg: any = null;
+          try {
+            msg = JSON.parse(line);
+          } catch (e) {
+            console.warn('Failed to parse NDJSON line', line);
+            continue;
+          }
+
+          // Handle event types: start, result, error, end
+          if (msg.type === 'start') {
+            const nid = msg.node_id;
+            setNodes((nds) =>
+              nds.map((n) => (n.id === nid ? { ...n, data: { ...n.data, status: 'running' } } : n))
+            );
+          } else if (msg.type === 'result') {
+            const nid = msg.node_id;
+            const result = msg.result;
+            setNodes((nds) =>
+              nds.map((n) =>
+                n.id === nid
+                  ? { ...n, data: { ...n.data, status: 'success', result: typeof result === 'string' ? result : JSON.stringify(result) } }
+                  : n
+              )
+            );
+          } else if (msg.type === 'error') {
+            const nid = msg.node_id;
+            const error = msg.error;
+            if (nid) {
+              setNodes((nds) =>
+                nds.map((n) => (n.id === nid ? { ...n, data: { ...n.data, status: 'error', result: String(error) } } : n))
+              );
+            } else {
+              console.error('Workflow error:', error);
             }
-            return n;
-          })
-        );
+          } else if (msg.type === 'end') {
+            console.log('Workflow stream ended');
+          }
+        }
+      }
+
+      // If buffer has final json
+      if (buf && buf.trim()) {
+        try {
+          const finalMsg = JSON.parse(buf.trim());
+          if (finalMsg.type === 'end') console.log('Workflow finished');
+        } catch (e) {
+          // ignore
+        }
       }
 
       alert('Workflow run complete!');

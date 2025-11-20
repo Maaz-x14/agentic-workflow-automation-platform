@@ -1,8 +1,10 @@
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse
 from app.db.database import AsyncSessionLocal
 from app.db import models
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
+import json
 from typing import Any, List, Dict
 from app.services.agent_service import run_single_agent
 
@@ -55,105 +57,116 @@ async def get_execution(exec_id: int, session: AsyncSession = Depends(get_sessio
 
 @router.post("/run")
 async def run_workflow_graph(payload: WorkflowRequest):
-    """Run a provided workflow graph (nodes + edges). For now iterate nodes and execute agent nodes."""
-    results: Dict[str, Any] = {}
-    try:
-        print(f"Received Graph: {len(payload.nodes)} nodes, {len(payload.edges)} edges")
-    except Exception:
-        print("Received Graph: could not read payload sizes")
-    # Build adjacency and indegree maps
-    node_ids = [n.id for n in payload.nodes]
-    adj: Dict[str, List[str]] = {nid: [] for nid in node_ids}
-    indeg: Dict[str, int] = {nid: 0 for nid in node_ids}
+    """Run a provided workflow graph (nodes + edges) and stream NDJSON events for UI feedback."""
 
-    for e in payload.edges:
-        # ensure edge endpoints exist
-        if e.source not in adj or e.target not in adj:
-            print(f"Warning: edge references unknown node: {e}")
-            continue
-        adj[e.source].append(e.target)
-        indeg[e.target] = indeg.get(e.target, 0) + 1
-
-    # Kahn's algorithm for topological ordering
-    queue = [nid for nid, d in indeg.items() if d == 0]
-    topo: List[str] = []
-    while queue:
-        cur = queue.pop(0)
-        topo.append(cur)
-        for nb in adj.get(cur, []):
-            indeg[nb] -= 1
-            if indeg[nb] == 0:
-                queue.append(nb)
-
-    if len(topo) != len(node_ids):
-        # cycle detected
-        print("⚠️ Cycle detected in workflow graph; aborting run")
-        raise HTTPException(status_code=400, detail="Cycle detected in workflow graph")
-
-    # Map node id -> node object for quick lookup
-    node_map: Dict[str, Node] = {n.id: n for n in payload.nodes}
-
-    # Execute nodes sequentially in topo order
-    context: Dict[str, Any] = {}
-    node_runs: List[Dict[str, Any]] = []
-    for nid in topo:
-        node = node_map.get(nid)
-        if not node:
-            continue
-        print(f"Executing node {nid} (type={node.type})")
-        ntype = node.type or (node.data or {}).get("nodeType")
-        if ntype != 'agent':
-            print(f"Skipping non-agent node {nid}")
-            results[nid] = {"status": "skipped", "reason": "not agent"}
-            continue
-
-        goal = (node.data or {}).get("goal") or (node.data or {}).get("prompt") or ""
-        if not goal:
-            print(f"⚠️ Node {nid} missing goal; skipping")
-            results[nid] = {"status": "skipped", "reason": "missing goal"}
-            continue
-
-        # Build context string from parent nodes' results
-        parent_ids = [e.source for e in payload.edges if e.target == nid]
-        parent_texts: List[str] = []
-        for pid in parent_ids:
-            p_res = context.get(pid)
-            # If the parent produced a structured result, prefer passing along its raw search_context
-            if isinstance(p_res, dict):
-                if p_res.get('search_context'):
-                    parent_texts.append("Previous Step Raw Findings:\n" + str(p_res.get('search_context')))
-                if p_res.get('result'):
-                    parent_texts.append(str(p_res.get('result')))
-                else:
-                    # fallback to printing the whole dict
-                    parent_texts.append(str(p_res))
-            else:
-                parent_texts.append(str(p_res))
-
-        context_string = "\n---\n".join(parent_texts) if parent_texts else ""
-
+    async def event_generator():
         try:
-            res = await run_single_agent(goal, context=context_string)
-            print(f"Node {nid} result: {res}")
-            results[nid] = res
-            context[nid] = res
-            # Build an output preview
-            preview = ""
-            if isinstance(res, dict):
-                preview = str(res.get('result') or res.get('saved_path') or res.get('detail') or '')
-            else:
-                preview = str(res)
+            try:
+                print(f"Received Graph: {len(payload.nodes)} nodes, {len(payload.edges)} edges")
+            except Exception:
+                print("Received Graph: could not read payload sizes")
 
-            node_runs.append({
-                "node_id": nid,
-                "status": "success",
-                "output_preview": (preview[:1000] + '...') if len(preview) > 1000 else preview,
-            })
-        except HTTPException:
-            raise
+            # Build adjacency and indegree maps
+            node_ids = [n.id for n in payload.nodes]
+            adj: Dict[str, List[str]] = {nid: [] for nid in node_ids}
+            indeg: Dict[str, int] = {nid: 0 for nid in node_ids}
+
+            for e in payload.edges:
+                # ensure edge endpoints exist
+                if e.source not in adj or e.target not in adj:
+                    print(f"Warning: edge references unknown node: {e}")
+                    continue
+                adj[e.source].append(e.target)
+                indeg[e.target] = indeg.get(e.target, 0) + 1
+
+            # Kahn's algorithm for topological ordering
+            queue = [nid for nid, d in indeg.items() if d == 0]
+            topo: List[str] = []
+            while queue:
+                cur = queue.pop(0)
+                topo.append(cur)
+                for nb in adj.get(cur, []):
+                    indeg[nb] -= 1
+                    if indeg[nb] == 0:
+                        queue.append(nb)
+
+            if len(topo) != len(node_ids):
+                # cycle detected
+                print("⚠️ Cycle detected in workflow graph; aborting run")
+                # Yield an error and end
+                yield (json.dumps({"type": "error", "node_id": None, "error": "Cycle detected in workflow graph"}) + "\n")
+                return
+
+            # Map node id -> node object for quick lookup
+            node_map: Dict[str, Node] = {n.id: n for n in payload.nodes}
+
+            # Execute nodes sequentially in topo order
+            context: Dict[str, Any] = {}
+
+            for nid in topo:
+                node = node_map.get(nid)
+                if not node:
+                    continue
+
+                # Notify start of node
+                yield (json.dumps({"type": "start", "node_id": nid}) + "\n")
+
+                print(f"Executing node {nid} (type={node.type})")
+                ntype = node.type or (node.data or {}).get("nodeType")
+                if ntype != 'agent':
+                    print(f"Skipping non-agent node {nid}")
+                    # send skipped as result
+                    yield (json.dumps({"type": "result", "node_id": nid, "result": json.dumps({"status": "skipped", "reason": "not agent"})}) + "\n")
+                    continue
+
+                goal = (node.data or {}).get("goal") or (node.data or {}).get("prompt") or ""
+                if not goal:
+                    print(f"⚠️ Node {nid} missing goal; skipping")
+                    yield (json.dumps({"type": "result", "node_id": nid, "result": json.dumps({"status": "skipped", "reason": "missing goal"})}) + "\n")
+                    continue
+
+                # Build context string from parent nodes' results
+                parent_ids = [e.source for e in payload.edges if e.target == nid]
+                parent_texts: List[str] = []
+                for pid in parent_ids:
+                    p_res = context.get(pid)
+                    # If the parent produced a structured result, prefer passing along its raw search_context
+                    if isinstance(p_res, dict):
+                        if p_res.get('search_context'):
+                            parent_texts.append("Previous Step Raw Findings:\n" + str(p_res.get('search_context')))
+                        if p_res.get('result'):
+                            parent_texts.append(str(p_res.get('result')))
+                        else:
+                            parent_texts.append(str(p_res))
+                    else:
+                        parent_texts.append(str(p_res))
+
+                context_string = "\n---\n".join(parent_texts) if parent_texts else ""
+
+                try:
+                    res = await run_single_agent(goal, context=context_string)
+                    print(f"Node {nid} result: {res}")
+                    context[nid] = res
+
+                    # send result event
+                    yield (json.dumps({"type": "result", "node_id": nid, "result": res}) + "\n")
+
+                except HTTPException:
+                    # re-raise HTTPExceptions
+                    raise
+                except Exception as e:
+                    print(f"Error executing node {nid}: {e}")
+                    context[nid] = {"status": "error", "detail": str(e)}
+                    yield (json.dumps({"type": "error", "node_id": nid, "error": str(e)}) + "\n")
+
+            # final end event
+            yield (json.dumps({"type": "end"}) + "\n")
+
         except Exception as e:
-            print(f"Error executing node {nid}: {e}")
-            results[nid] = {"status": "error", "detail": str(e)}
-            node_runs.append({"node_id": nid, "status": "error", "output_preview": str(e)})
+            # If some unexpected error occurs at generator level, emit an error event
+            try:
+                yield (json.dumps({"type": "error", "node_id": None, "error": str(e)}) + "\n")
+            except Exception:
+                pass
 
-    return {"status": "completed", "order": topo, "results": results, "node_runs": node_runs}
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
