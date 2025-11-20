@@ -1,6 +1,3 @@
-Here is the complete, professional documentation for the **Agentic Workflow Automation Platform**. This document serves as the "Source of Truth" for everything built from Phase 1 to Phase 5.
-
------
 
 # 📘 Agentic Workflow Automation Platform
 
@@ -215,4 +212,6 @@ APIs
 - `POST /documents/upload` - upload files
 - `GET /search?q=...` - dummy search
 
-
+Next steps
+- Implement persistence, PGVector integration, embeddings, and local LLM adapter.
+- Improve frontend editor and wire endpoints.
